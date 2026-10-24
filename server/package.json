@@ -1,0 +1,39 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js",
+    "seed": "node seed.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "check": "node --check server.js && node --check seed.js && node --check routes/api.js && node --check middleware/auth.js && node --check middleware/systemPause.js && node --check models/User.js && node --check models/FoodListing.js && node --check models/Match.js && node --check models/Dispute.js && node --check models/SystemSettings.js && node --check utils/geo.js && node --check utils/validation.js && node --check test/api.test.js && node --check test/unit.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.24.6",
+    "morgan": "^1.12.1",
+    "pdfkit": "^0.20.2",
+    "twilio": "^6.2.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^10.4.2",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.3.1"
+  }
+}
