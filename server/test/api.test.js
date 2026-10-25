@@ -59,6 +59,11 @@ test(
       const missing = await request(app).get("/api/not-a-route").expect(404);
       assert.match(missing.body.message, /No API route/);
       await request(app).get("/api/auth/me").expect(401);
+      const invalidToken = await request(app)
+        .get("/api/auth/me")
+        .set("Authorization", "Bearer invalid-token")
+        .expect(401);
+      assert.match(invalidToken.body.message, /session has expired/i);
     });
 
     await t.test("login cookies, identity lookup, invalid credentials, and logout work", async () => {
@@ -253,6 +258,80 @@ test(
       globalThis.ecobiteTestMeals = 60;
     });
 
+    await t.test("insufficient receiver capacity leaves a listing and reservation unchanged", async () => {
+      const receiver = request.agent(app);
+      await receiver
+        .post("/api/auth/login")
+        .send({ email: "ngo1@ecobite.org", password: "EcoBite123!" })
+        .expect(200);
+
+      const user = await User.findOne({ email: "ngo1@ecobite.org" });
+      const originalCapacity = user.capacityMeals;
+      const originalReservedMeals = user.reservedMeals;
+      await User.updateOne(
+        { _id: user._id },
+        { $set: { capacityMeals: originalReservedMeals + globalThis.ecobiteTestMeals - 1 } },
+      );
+
+      try {
+        const failedClaim = await receiver
+          .post("/api/matches/claim")
+          .send({ listingId: globalThis.ecobiteTestListingId })
+          .expect(409);
+        assert.match(failedClaim.body.message, /capacity/i);
+
+        const listing = await FoodListing.findById(globalThis.ecobiteTestListingId);
+        const updatedUser = await User.findById(user._id);
+        assert.equal(listing.status, "available");
+        assert.equal(listing.availableQuantity, globalThis.ecobiteTestMeals);
+        assert.equal(updatedUser.reservedMeals, originalReservedMeals);
+        assert.equal(
+          await Match.countDocuments({ listing: globalThis.ecobiteTestListingId }),
+          0,
+        );
+      } finally {
+        await User.updateOne(
+          { _id: user._id },
+          { $set: { capacityMeals: originalCapacity } },
+        );
+      }
+    });
+
+    await t.test("expired listings are hidden and cannot be claimed", async () => {
+      const receiver = request.agent(app);
+      await receiver
+        .post("/api/auth/login")
+        .send({ email: "ngo1@ecobite.org", password: "EcoBite123!" })
+        .expect(200);
+      const user = await User.findOne({ email: "ngo1@ecobite.org" });
+      const donor = await User.findOne({ email: "donor2@ecobite.org" });
+      const listing = await FoodListing.create({
+        donor: donor._id,
+        title: "Expired integration test food",
+        quantity: 5,
+        unit: "meals",
+        foodType: "packaged",
+        location: user.location,
+        preparedAt: new Date(Date.now() - 4 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() - 60 * 1000),
+        temperatureControlled: true,
+        allergens: [],
+        liabilityWaiver: true,
+        availableQuantity: 5,
+        matchedReceivers: [user._id],
+      });
+
+      const feed = await receiver.get("/api/listings/nearby").expect(200);
+      assert.equal(feed.body.listings.some((entry) => entry._id === listing.id), false);
+      const failedClaim = await receiver
+        .post("/api/matches/claim")
+        .send({ listingId: listing.id })
+        .expect(409);
+      assert.match(failedClaim.body.message, /no longer available/i);
+      assert.equal(await Match.countDocuments({ listing: listing._id }), 0);
+      assert.equal((await User.findById(user._id)).reservedMeals, user.reservedMeals);
+    });
+
     await t.test("concurrent claims create exactly one match and reserve NGO capacity", async () => {
       const receiver = request.agent(app);
       await receiver
@@ -284,7 +363,7 @@ test(
       const feed = await receiver.get("/api/listings/nearby").expect(200);
       assert.equal(feed.body.listings.some((entry) => entry._id === globalThis.ecobiteTestListingId), false);
       await receiver.get("/api/matches/mine").expect(200);
-      await request(receiver)
+      await receiver
         .post("/api/matches/claim")
         .send({ listingId: "not-a-valid-id" })
         .expect(400);
@@ -293,7 +372,7 @@ test(
     await t.test("volunteers assign routes and delivery updates release reserved capacity once", async () => {
       const volunteer = request.agent(app);
       const secondVolunteer = request.agent(app);
-      await volunteer
+      const volunteerLogin = await volunteer
         .post("/api/auth/login")
         .send({ email: "volunteer1@ecobite.org", password: "EcoBite123!" })
         .expect(200);
@@ -307,7 +386,7 @@ test(
         .post(`/api/volunteer/${globalThis.ecobiteTestMatchId}/assign`)
         .send({})
         .expect(200);
-      assert.equal(assignment.body.match.volunteer.name, "Ishan Patel");
+      assert.equal(assignment.body.match.volunteer, volunteerLogin.body.user.id);
       await secondVolunteer
         .post(`/api/volunteer/${globalThis.ecobiteTestMatchId}/assign`)
         .send({})
@@ -345,7 +424,7 @@ test(
       const impact = await donor.get("/api/impact").expect(200);
       assert.equal(impact.body.mealsSaved, globalThis.ecobiteTestMeals);
       assert.equal(impact.body.co2Kg, 150);
-      assert.ok(impact.body.activeDonations >= 10);
+      assert.equal(impact.body.activeDonations, 2);
       assert.ok(impact.body.activeMatches >= 0);
       const report = await donor
         .get("/api/impact/report")
